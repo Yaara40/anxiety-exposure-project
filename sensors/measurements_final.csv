@@ -1,0 +1,11 @@
+timestamp,person,measurement_num,baseline_bpm,stress_bpm,diff
+17:00:21,yaara,1,76,86,10
+17:02:56,yaara,2,84,98,14
+17:05:28,yaara,3,90,94,4
+17:07:43,yaara,4,70,80,10
+17:12:07,tamar,1,88,90,2
+17:13:52,tamar,2,82,88,6
+17:16:00,tamar,3,84,102,18
+17:17:34,tamar,4,96,98,2
+17:28:12,reut,1,70,86,16
+17:34:33,reut,4,72,74,2
