@@ -1,22 +1,26 @@
 # sensor/bpm_graph.py
+
 import os
 import time
+import threading
 from collections import deque
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from sensor.bpm_live import read_adc, calculate_bpm, WINDOW_SIZE
+from sensor.bpm_live_fake import read_adc, calculate_bpm, WINDOW_SIZE
 
 os.environ['DISPLAY'] = ':0'
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
 GRAPH_POINTS = 60
 
 def measure_baseline():
+    """Measure resting BPM before session starts"""
     print("Put finger on sensor. Press Enter to start baseline (30 seconds)...")
     input()
     print("Measuring baseline...")
     raw_window = deque(maxlen=WINDOW_SIZE)
     start = time.time()
-    while time.time() - start < 5:#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    while time.time() - start < 5:  # change to 30 for real use
         raw_window.append(read_adc(0))
         time.sleep(0.02)
         elapsed = int(time.time() - start)
@@ -28,12 +32,19 @@ def measure_baseline():
     return baseline
 
 def run_graph(baseline, duration_minutes, on_anxiety_detected):
+    """
+    Run live BPM graph for session duration.
+    baseline: resting BPM
+    duration_minutes: session length
+    on_anxiety_detected: called in a thread when BPM exceeds threshold
+    """
     threshold_line = baseline * 1.08
     duration_seconds = duration_minutes * 60
     start_time = time.time()
 
+    # Graph setup
     plt.rcParams['toolbar'] = 'None'
-    fig, ax = plt.subplots(figsize=(6.4, 10.24), dpi =100)
+    fig, ax = plt.subplots(figsize=(6.4, 10.24), dpi=100)
     manager = plt.get_current_fig_manager()
     manager.window.showNormal()
     manager.window.setGeometry(640, 0, 640, 1024)
@@ -46,10 +57,12 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
+    # Data containers
     bpm_history = deque([None] * GRAPH_POINTS, maxlen=GRAPH_POINTS)
     raw_window = deque(maxlen=WINDOW_SIZE)
-    line, = ax.plot([], [], color='cyan', linewidth=2)
 
+    # Graph elements
+    line, = ax.plot([], [], color='cyan', linewidth=2)
     ax.plot([0, GRAPH_POINTS], [baseline, baseline],
             color='red', linewidth=1.5, linestyle='--', label=f'Baseline: {baseline}')
     ax.plot([0, GRAPH_POINTS], [threshold_line, threshold_line],
@@ -61,6 +74,7 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     ax.set_ylabel('BPM', color='white')
     ax.legend(facecolor='black', labelcolor='white')
 
+    # Text elements
     bpm_text = ax.text(0.98, 0.95, '', transform=ax.transAxes,
                        fontsize=32, color='cyan', fontweight='bold',
                        ha='right', va='top')
@@ -69,22 +83,32 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     time_text = ax.text(0.02, 0.95, '', transform=ax.transAxes,
                         fontsize=12, color='white', va='top')
 
+    # State
     last_update = [time.time()]
+    in_calming = [False]  # True when we are in calming phase
 
     def update(frame):
+        """Called every 20ms by matplotlib animation"""
+
+        # Check if session is over
         elapsed = time.time() - start_time
         remaining = duration_seconds - elapsed
         if remaining <= 0:
             plt.close()
             return line, bpm_text, status_text, time_text
 
+        # Update countdown timer
         time_text.set_text(f"Time left: {int(remaining//60):02d}:{int(remaining%60):02d}")
+
+        # Read one raw sample from sensor
         raw_window.append(read_adc(0))
 
+        # Calculate BPM once per second
         if time.time() - last_update[0] >= 1.0:
             bpm = calculate_bpm(list(raw_window))
             bpm_history.append(bpm)
 
+            # Update graph line
             data = [b for b in bpm_history if b is not None]
             if data:
                 xs = [i for i, b in enumerate(bpm_history) if b is not None]
@@ -92,13 +116,24 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
 
             if bpm:
                 bpm_text.set_text(f"{bpm} BPM")
+
                 if bpm >= threshold_line:
-                    status_text.set_text("ANXIETY DETECTED")
-                    status_text.set_color('red')
-                    on_anxiety_detected()
+                    if not in_calming[0]:
+                        # Anxiety detected - trigger callback in thread
+                        in_calming[0] = True
+                        status_text.set_text("ANXIETY DETECTED")
+                        status_text.set_color('red')
+                        threading.Thread(target=on_anxiety_detected, daemon=True).start()
+                    else:
+                        status_text.set_text("Calming...")
+                        status_text.set_color('yellow')
                 else:
+                    if in_calming[0]:
+                        # BPM dropped - back to normal
+                        in_calming[0] = False
                     status_text.set_text("Normal")
                     status_text.set_color('green')
+
             else:
                 bpm_text.set_text("--")
                 status_text.set_text("No finger detected")
