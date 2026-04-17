@@ -1,10 +1,72 @@
-# main.py
 import time
 import subprocess
 import threading
-from sensor.bpm_graph import measure_baseline, run_graph
+import requests
+from sensor.bpm_graph import measure_baseline, run_graph, freeze_graph
 
 VIDEOS_DIR = "/home/pi/anxiety_project/videos/"
+VLC_PASSWORD = "1234"
+EXPOSURE_PORT = 9000
+CALMING_PORT = 9001
+CALMING_DURATION = 10      # adjust to your calming video length in seconds
+SWITCH_DELAY = 7           # seconds it takes to kill/launch VLC - freeze graph for this long
+
+def vlc_command(port, command):
+    try:
+        requests.get(
+            f"http://localhost:{port}/requests/status.json?command={command}",
+            auth=("", VLC_PASSWORD),
+            timeout=2
+        )
+    except Exception as e:
+        print(f"VLC command error (port {port}): {e}")
+
+def launch_exposure():
+    subprocess.Popen(
+        ['vlc',
+         '--start-paused',
+         '--intf', 'http',
+         '--http-host', 'localhost',
+         '--http-port', str(EXPOSURE_PORT),
+         '--http-password', VLC_PASSWORD,
+         VIDEOS_DIR + "exposure.mp4"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+def launch_calming_hidden():
+    subprocess.Popen(
+        ['vlc',
+         '--start-paused',
+         '--no-video',
+         '--intf', 'http',
+         '--http-host', 'localhost',
+         '--http-port', str(CALMING_PORT),
+         '--http-password', VLC_PASSWORD,
+         VIDEOS_DIR + "calming.mp4"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+def launch_calming_visible():
+    subprocess.Popen(
+        ['vlc',
+         '--intf', 'http',
+         '--http-host', 'localhost',
+         '--http-port', str(CALMING_PORT),
+         '--http-password', VLC_PASSWORD,
+         VIDEOS_DIR + "calming.mp4"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+def kill_vlc(port):
+    subprocess.run(
+        ['pkill', '-f', f'http-port {port}'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    time.sleep(2)
 
 def choose_session():
     minutes = input("Session duration (minutes): ").strip()
@@ -12,73 +74,69 @@ def choose_session():
         minutes = int(minutes)
     except:
         minutes = 5
-    return "exposure.mp4", minutes
-
-def play_video(filename):
-    process = subprocess.Popen(
-        ['vlc',
-         '--no-osd',
-         '--no-video-title-show',
-         '--avcodec-threads', '1',
-         '--width', '640',
-         '--height', '1024',
-         '--no-qt-fs-controller',
-         '--qt-minimal-view',
-         '--no-qt-system-tray',
-         VIDEOS_DIR + filename],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    def move_window():
-        time.sleep(2)
-        subprocess.Popen(['wmctrl', '-r', 'VLC', '-e', '0,0,0,640,1024'])
-    threading.Thread(target=move_window, daemon=True).start()
-    return process
-
-def stop_video(process):
-    if process:
-        process.terminate()
-        process.wait()
+    return minutes
 
 def main():
     print("=== Anxiety Exposure Therapy System ===\n")
     baseline = measure_baseline()
-    video_file, duration_minutes = choose_session()
-    print(f"\nStarting session: {video_file} | {duration_minutes} minutes")
-    input("Press Enter to begin...")
+    duration_minutes = choose_session()
 
-    video_process = [None]
-    calming_process = [None]
+    print(f"\nLoading videos, please wait...")
+    launch_exposure()
+    time.sleep(5)
+    launch_calming_hidden()
+    time.sleep(3)
 
-    # Track exposure position
-    exposure_start_time = [None]
-    exposure_elapsed = [0]
+    print("Starting session...")
+
+    in_anxiety = [False]
 
     def on_anxiety_detected():
+        if in_anxiety[0]:
+            return
+        in_anxiety[0] = True
         print("Anxiety detected - switching to calming video")
-        if exposure_start_time[0]:
-            exposure_elapsed[0] += time.time() - exposure_start_time[0]
-            exposure_start_time[0] = None
-        print(f"Saved position: {exposure_elapsed[0]:.1f} seconds")
-        stop_video(video_process[0])
-        calming_process[0] = play_video("calming.mp4")
-        time.sleep(10)
-        stop_video(calming_process[0])
-        print(f"Resuming from: {exposure_elapsed[0]:.1f} seconds")
-        video_process[0] = play_video(video_file)
-        exposure_start_time[0] = time.time()
 
-    def delayed_video():
-        time.sleep(10)
-        exposure_start_time[0] = time.time()
-        video_process[0] = play_video(video_file)
+        # Freeze graph to match video switching delay
+        freeze_graph(SWITCH_DELAY)
 
-    threading.Thread(target=delayed_video, daemon=True).start()
+        # Pause exposure
+        vlc_command(EXPOSURE_PORT, "pl_pause")
 
+        # Kill hidden calming, reopen with video
+        kill_vlc(CALMING_PORT)
+        launch_calming_visible()
+        time.sleep(5)
+        vlc_command(CALMING_PORT, "pl_play")
+
+        # Wait for calming video to finish
+        time.sleep(CALMING_DURATION)
+
+        # Freeze graph again for switch back delay
+        freeze_graph(SWITCH_DELAY)
+
+        # Kill visible calming, reopen hidden, resume exposure
+        kill_vlc(CALMING_PORT)
+        launch_calming_hidden()
+        time.sleep(3)
+        vlc_command(EXPOSURE_PORT, "pl_play")
+
+        in_anxiety[0] = False
+        print("Resumed exposure video")
+
+    def delayed_start():
+        time.sleep(3)
+        vlc_command(EXPOSURE_PORT, "pl_play")
+        print("Exposure video started")
+
+    threading.Thread(target=delayed_start, daemon=True).start()
+
+    # This blocks until session ends
     run_graph(baseline, duration_minutes, on_anxiety_detected)
 
-    stop_video(video_process[0])
-    stop_video(calming_process[0])
+    # Session complete - kill both VLC instances
+    kill_vlc(CALMING_PORT)
+    kill_vlc(EXPOSURE_PORT)
     print("\nSession complete!")
 
 if __name__ == "__main__":
