@@ -2,14 +2,22 @@ import time
 import subprocess
 import threading
 import requests
+import os
 from sensor.bpm_graph import measure_baseline, run_graph, freeze_graph
 
 VIDEOS_DIR = "/home/pi/anxiety_project/videos/"
 VLC_PASSWORD = "1234"
 EXPOSURE_PORT = 9000
 CALMING_PORT = 9001
-CALMING_DURATION = 10      # adjust to your calming video length in seconds
-SWITCH_DELAY = 7           # seconds it takes to kill/launch VLC - freeze graph for this long
+CALMING_DURATION = 10
+SWITCH_DELAY = 7
+
+VLC_X = 0
+VLC_Y = 62
+VLC_W = 640
+VLC_H = 1040
+
+VLC_ENV = {**os.environ, 'DISPLAY': ':0', 'QT_QPA_PLATFORM': 'xcb', 'WAYLAND_DISPLAY': ''}
 
 def vlc_command(port, command):
     try:
@@ -21,44 +29,63 @@ def vlc_command(port, command):
     except Exception as e:
         print(f"VLC command error (port {port}): {e}")
 
+def position_vlc():
+    def _move():
+        time.sleep(5)
+        # First check what windows exist
+        check = subprocess.run(
+            ['bash', '-c', 'DISPLAY=:0 xdotool search --name "VLC media player"'],
+            capture_output=True, text=True
+        )
+        print(f"VLC windows found: {check.stdout.strip()}")
+        
+        result = subprocess.run(
+            ['bash', '-c', f'DISPLAY=:0 xdotool search --name "VLC media player" windowmove {VLC_X} {VLC_Y} windowsize {VLC_W} {VLC_H}'],
+            capture_output=True, text=True
+        )
+        print(f"xdotool result: {result.returncode} {result.stderr.strip()}")
+    threading.Thread(target=_move, daemon=True).start()
+
+def vlc_base_args(port):
+    return [
+        'vlc',
+        '--intf', 'http',
+        '--http-host', 'localhost',
+        '--http-port', str(port),
+        '--http-password', VLC_PASSWORD,
+        '--no-osd',
+        '--no-video-title-show',
+        '--no-qt-fs-controller',
+        '--no-fullscreen',
+        '--qt-minimal-view',
+        '--no-qt-system-tray',
+    ]
+
 def launch_exposure():
     subprocess.Popen(
-        ['vlc',
-         '--start-paused',
-         '--intf', 'http',
-         '--http-host', 'localhost',
-         '--http-port', str(EXPOSURE_PORT),
-         '--http-password', VLC_PASSWORD,
-         VIDEOS_DIR + "exposure.mp4"],
+        vlc_base_args(EXPOSURE_PORT) + ['--start-paused', VIDEOS_DIR + "exposure.mp4"],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
+        env=VLC_ENV
     )
+    position_vlc()
 
 def launch_calming_hidden():
     subprocess.Popen(
-        ['vlc',
-         '--start-paused',
-         '--no-video',
-         '--intf', 'http',
-         '--http-host', 'localhost',
-         '--http-port', str(CALMING_PORT),
-         '--http-password', VLC_PASSWORD,
-         VIDEOS_DIR + "calming.mp4"],
+        vlc_base_args(CALMING_PORT) + ['--start-paused', '--no-video', VIDEOS_DIR + "calming.mp4"],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
+        env=VLC_ENV
     )
 
 def launch_calming_visible():
     subprocess.Popen(
-        ['vlc',
-         '--intf', 'http',
-         '--http-host', 'localhost',
-         '--http-port', str(CALMING_PORT),
-         '--http-password', VLC_PASSWORD,
-         VIDEOS_DIR + "calming.mp4"],
+        vlc_base_args(CALMING_PORT) + [VIDEOS_DIR + "calming.mp4"],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
+        env=VLC_ENV
     )
+    position_vlc()
 
 def kill_vlc(port):
     subprocess.run(
@@ -97,25 +124,17 @@ def main():
         in_anxiety[0] = True
         print("Anxiety detected - switching to calming video")
 
-        # Freeze graph to match video switching delay
         freeze_graph(SWITCH_DELAY)
-
-        # Pause exposure
         vlc_command(EXPOSURE_PORT, "pl_pause")
 
-        # Kill hidden calming, reopen with video
         kill_vlc(CALMING_PORT)
         launch_calming_visible()
         time.sleep(5)
         vlc_command(CALMING_PORT, "pl_play")
 
-        # Wait for calming video to finish
         time.sleep(CALMING_DURATION)
 
-        # Freeze graph again for switch back delay
         freeze_graph(SWITCH_DELAY)
-
-        # Kill visible calming, reopen hidden, resume exposure
         kill_vlc(CALMING_PORT)
         launch_calming_hidden()
         time.sleep(3)
@@ -131,10 +150,9 @@ def main():
 
     threading.Thread(target=delayed_start, daemon=True).start()
 
-    # This blocks until session ends
     run_graph(baseline, duration_minutes, on_anxiety_detected)
 
-    # Session complete - kill both VLC instances
+    print("Killing VLC instances...")
     kill_vlc(CALMING_PORT)
     kill_vlc(EXPOSURE_PORT)
     print("\nSession complete!")

@@ -11,14 +11,12 @@ os.environ['QT_QPA_PLATFORM'] = 'xcb'
 
 GRAPH_POINTS = 60
 
-# Shared freeze state - set from main.py via on_anxiety_detected
 _freeze_until = [0]
 _frozen_value = [None]
 
 def freeze_graph(seconds):
-    """Call this to freeze the BPM display for N seconds"""
     _freeze_until[0] = time.time() + seconds
-    _frozen_value[0] = None  # will be set on first freeze frame
+    _frozen_value[0] = None
 
 def measure_baseline():
     print("Put finger on sensor. Press Enter to start baseline (30 seconds)...")
@@ -26,7 +24,7 @@ def measure_baseline():
     print("Measuring baseline...")
     raw_window = deque(maxlen=WINDOW_SIZE)
     start = time.time()
-    while time.time() - start < 5:  # change to 30 for real use
+    while time.time() - start < 5:
         raw_window.append(read_adc(0))
         time.sleep(0.02)
         elapsed = int(time.time() - start)
@@ -43,10 +41,11 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     start_time = time.time()
 
     plt.rcParams['toolbar'] = 'None'
-    fig, ax = plt.subplots(figsize=(6.4, 10.24), dpi=100)
+    fig, ax = plt.subplots(figsize=(6.4, 10.4), dpi=100)
     manager = plt.get_current_fig_manager()
     manager.window.showNormal()
-    manager.window.setGeometry(640, 0, 640, 1024)
+    # Right half: x=640, y=62 (below taskbar), width=640, height=1040
+    manager.window.setGeometry(640, 62, 640, 1040)
 
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
@@ -91,12 +90,9 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
             return line, bpm_text, status_text, time_text
 
         time_text.set_text(f"Time left: {int(remaining//60):02d}:{int(remaining%60):02d}")
-
         raw_window.append(read_adc(0))
 
         if time.time() - last_update[0] >= 1.0:
-
-            # Check if we are in freeze mode
             if time.time() < _freeze_until[0]:
                 bpm = _frozen_value[0]
             else:
@@ -110,7 +106,6 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
                 line.set_data(xs, data)
 
             if bpm:
-                # Store frozen value on first freeze frame
                 if _frozen_value[0] is None:
                     _frozen_value[0] = bpm
 
@@ -143,3 +138,4 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     plt.tight_layout()
     plt.show()
     plt.close('all')
+    print("DEBUG: plt.show() returned")
