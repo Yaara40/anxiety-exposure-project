@@ -4,7 +4,7 @@ import threading
 from collections import deque
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from sensor.bpm_live_fake import read_adc, calculate_bpm, WINDOW_SIZE
+from sensor.bpm_live_max import read_adc, calculate_bpm, WINDOW_SIZE
 
 os.environ['DISPLAY'] = ':0'
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
@@ -24,7 +24,7 @@ def measure_baseline():
     print("Measuring baseline...")
     raw_window = deque(maxlen=WINDOW_SIZE)
     start = time.time()
-    while time.time() - start < 5:
+    while time.time() - start < 30:
         raw_window.append(read_adc(0))
         time.sleep(0.02)
         elapsed = int(time.time() - start)
