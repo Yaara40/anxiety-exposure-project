@@ -3,6 +3,7 @@ import subprocess
 import threading
 import requests
 import os
+import argparse
 from sensor.bpm_graph import measure_baseline, run_graph, freeze_graph
 
 VIDEOS_DIR = "/home/pi/anxiety_project/videos/"
@@ -32,13 +33,6 @@ def vlc_command(port, command):
 def position_vlc():
     def _move():
         time.sleep(5)
-        # First check what windows exist
-        check = subprocess.run(
-            ['bash', '-c', 'DISPLAY=:0 xdotool search --name "VLC media player"'],
-            capture_output=True, text=True
-        )
-        print(f"VLC windows found: {check.stdout.strip()}")
-        
         result = subprocess.run(
             ['bash', '-c', f'DISPLAY=:0 xdotool search --name "VLC media player" windowmove {VLC_X} {VLC_Y} windowsize {VLC_W} {VLC_H}'],
             capture_output=True, text=True
@@ -61,9 +55,9 @@ def vlc_base_args(port):
         '--no-qt-system-tray',
     ]
 
-def launch_exposure():
+def launch_exposure(video_file):
     subprocess.Popen(
-        vlc_base_args(EXPOSURE_PORT) + ['--start-paused', VIDEOS_DIR + "exposure.mp4"],
+        vlc_base_args(EXPOSURE_PORT) + ['--start-paused', VIDEOS_DIR + video_file],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=VLC_ENV
@@ -80,12 +74,7 @@ def launch_calming_hidden():
 
 def launch_calming_visible():
     subprocess.Popen(
-        vlc_base_args(CALMING_PORT) + [
-            '--start-paused',
-            '--no-fullscreen',
-            '--no-embedded-video',
-            VIDEOS_DIR + "calming.mp4"
-        ],
+        vlc_base_args(CALMING_PORT) + ['--start-paused', '--no-embedded-video', VIDEOS_DIR + "calming.mp4"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=VLC_ENV
@@ -109,12 +98,32 @@ def choose_session():
     return minutes
 
 def main():
+    # Parse command line arguments from api.py
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--video', type=str, default=None)
+    parser.add_argument('--duration', type=int, default=None)
+    parser.add_argument('--baseline', type=int, default=None)
+    args = parser.parse_args()
+
     print("=== Anxiety Exposure Therapy System ===\n")
-    baseline = measure_baseline()
-    duration_minutes = choose_session()
+
+    # If called from API, skip interactive input
+    if args.baseline is not None:
+        baseline = args.baseline
+        print(f"Baseline (from API): {baseline} BPM")
+    else:
+        baseline = measure_baseline()
+
+    if args.duration is not None:
+        duration_minutes = args.duration
+        print(f"Duration (from API): {duration_minutes} minutes")
+    else:
+        duration_minutes = choose_session()
+
+    video_file = args.video if args.video else "exposure.mp4"
 
     print(f"\nLoading videos, please wait...")
-    launch_exposure()
+    launch_exposure(video_file)
     time.sleep(5)
     launch_calming_hidden()
     time.sleep(3)
