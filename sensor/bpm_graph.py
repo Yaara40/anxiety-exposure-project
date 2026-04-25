@@ -4,7 +4,7 @@ import threading
 from collections import deque
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from sensor.bpm_live_max import read_adc, calculate_bpm, WINDOW_SIZE
+from sensor.bpm_live_max import _sample_buffer, _lock, calculate_bpm, WINDOW_SIZE
 
 os.environ['DISPLAY'] = ':0'
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
@@ -22,14 +22,14 @@ def measure_baseline():
     print("Put finger on sensor. Press Enter to start baseline (30 seconds)...")
     input()
     print("Measuring baseline...")
-    raw_window = deque(maxlen=WINDOW_SIZE)
     start = time.time()
-    while time.time() - start < 30:
-        raw_window.append(read_adc(0))
-        time.sleep(0.02)
+    while time.time() - start < 5:  # change to 30 for real use
         elapsed = int(time.time() - start)
         print(f"\r{elapsed}/30 seconds...", end="")
-    baseline = calculate_bpm(list(raw_window))
+        time.sleep(0.1)
+    with _lock:
+        samples = list(_sample_buffer)
+    baseline = calculate_bpm(samples)
     if baseline is None:
         baseline = 70
     print(f"\nBaseline: {baseline} BPM\n")
@@ -44,7 +44,6 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     fig, ax = plt.subplots(figsize=(6.4, 10.4), dpi=100)
     manager = plt.get_current_fig_manager()
     manager.window.showNormal()
-    # Right half: x=640, y=62 (below taskbar), width=640, height=1040
     manager.window.setGeometry(640, 62, 640, 1040)
 
     fig.patch.set_facecolor('black')
@@ -56,7 +55,6 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
     ax.spines['right'].set_visible(False)
 
     bpm_history = deque([None] * GRAPH_POINTS, maxlen=GRAPH_POINTS)
-    raw_window = deque(maxlen=WINDOW_SIZE)
 
     line, = ax.plot([], [], color='cyan', linewidth=2)
     ax.plot([0, GRAPH_POINTS], [baseline, baseline],
@@ -80,23 +78,28 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
 
     last_update = [time.time()]
     in_calming = [False]
+    _should_stop = [False]
 
     def update(frame):
+        if _should_stop[0]:
+            return line, bpm_text, status_text, time_text
+
         elapsed = time.time() - start_time
         remaining = duration_seconds - elapsed
         if remaining <= 0:
-            ani.event_source.stop()
-            plt.close('all')
+            _should_stop[0] = True
+            fig.canvas.stop_event_loop()
             return line, bpm_text, status_text, time_text
 
         time_text.set_text(f"Time left: {int(remaining//60):02d}:{int(remaining%60):02d}")
-        raw_window.append(read_adc(0))
 
         if time.time() - last_update[0] >= 1.0:
             if time.time() < _freeze_until[0]:
                 bpm = _frozen_value[0]
             else:
-                bpm = calculate_bpm(list(raw_window))
+                with _lock:
+                    samples = list(_sample_buffer)
+                bpm = calculate_bpm(samples)
 
             bpm_history.append(bpm)
 
@@ -136,6 +139,6 @@ def run_graph(baseline, duration_minutes, on_anxiety_detected):
 
     ani = animation.FuncAnimation(fig, update, interval=20, blit=True, cache_frame_data=False)
     plt.tight_layout()
-    plt.show()
+    fig.canvas.start_event_loop(duration_seconds + 10)
     plt.close('all')
-    print("DEBUG: plt.show() returned")
+    print("DEBUG: event loop returned")

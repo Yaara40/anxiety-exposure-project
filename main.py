@@ -80,7 +80,12 @@ def launch_calming_hidden():
 
 def launch_calming_visible():
     subprocess.Popen(
-        vlc_base_args(CALMING_PORT) + [VIDEOS_DIR + "calming.mp4"],
+        vlc_base_args(CALMING_PORT) + [
+            '--start-paused',
+            '--no-fullscreen',
+            '--no-embedded-video',
+            VIDEOS_DIR + "calming.mp4"
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=VLC_ENV
@@ -129,7 +134,8 @@ def main():
 
         kill_vlc(CALMING_PORT)
         launch_calming_visible()
-        time.sleep(5)
+        time.sleep(3)
+        vlc_command(CALMING_PORT, "fullscreen&val=0")
         vlc_command(CALMING_PORT, "pl_play")
 
         time.sleep(CALMING_DURATION)
